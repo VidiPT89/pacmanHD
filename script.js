@@ -149,6 +149,9 @@ const PHASES = [
 
 const BASE_PAC_SPEED = 0.155; // px/ms
 const BASE_GHOST_SPEED = 0.135; // px/ms
+const QUEUE_BUFFER_MS = 380; // how long a queued turn stays valid before it expires
+const DEATH_ANIM_MS = 900;
+const READY_PAUSE_MS = 650;
 
 function idx(col, row) { return row * COLS + col; }
 
@@ -201,6 +204,8 @@ const state = {
   paused: false,
   over: false,
   transitioning: false,
+  dying: false,
+  dyingTimer: 0,
   invulnerableTimer: 0,
   frightenedTimer: 0,
   ghostEatStreak: 0,
@@ -323,7 +328,7 @@ function makePacman() {
   return {
     col: PAC_HOME.col, row: PAC_HOME.row,
     x: PAC_HOME.col * CELL, y: PAC_HOME.row * CELL,
-    dir: { x: 0, y: 0 }, queuedDir: { x: 0, y: 0 }, lastDir: { x: -1, y: 0 },
+    dir: { x: 0, y: 0 }, queuedDir: { x: 0, y: 0 }, queuedDirAge: 0, lastDir: { x: -1, y: 0 },
     mouthPhase: 0,
   };
 }
@@ -390,11 +395,20 @@ function pacBlocked(col, row) {
 }
 function pickPacDir(e, col, row) {
   const q = pacman.queuedDir;
-  if ((q.x || q.y) && !pacBlocked(col + q.x, row + q.y)) {
-    if (q.x || q.y) pacman.lastDir = q;
+  const qHasValue = q.x || q.y;
+  const qOpen = qHasValue && !pacBlocked(col + q.x, row + q.y);
+  // a freshly-queued turn takes priority so an early key press doesn't fire
+  // at the first unrelated intersection it happens to reach first
+  if (qOpen && pacman.queuedDirAge <= QUEUE_BUFFER_MS) {
+    pacman.lastDir = q;
     return q;
   }
   if ((e.dir.x || e.dir.y) && !pacBlocked(col + e.dir.x, row + e.dir.y)) return e.dir;
+  // current direction is a dead end: fall back to the queued turn even if stale
+  if (qOpen) {
+    pacman.lastDir = q;
+    return q;
+  }
   return { x: 0, y: 0 };
 }
 
@@ -571,23 +585,39 @@ function eatGhost(g) {
   checkExtraLife();
 }
 
-function loseLife() {
-  state.lives--;
-  renderLives();
-  gameCard.classList.add("shake");
-  setTimeout(() => gameCard.classList.remove("shake"), 400);
+function startDeathSequence() {
+  state.dying = true;
+  state.dyingTimer = 0;
+  state.transitioning = true;
+  pacman.dir = { x: 0, y: 0 };
+  pacman.queuedDir = { x: 0, y: 0 };
   playDeathSequence();
   spawnExplosion(pacman.x + CELL / 2, pacman.y + CELL / 2, "#ffd400", 22);
-  if (state.lives <= 0) { endGame(); return; }
-  state.invulnerableTimer = 1900;
+  gameCard.classList.add("shake");
+  setTimeout(() => gameCard.classList.remove("shake"), 400);
+}
+
+function finishDeathSequence() {
+  state.dying = false;
+  state.lives--;
+  renderLives();
+  if (state.lives <= 0) {
+    state.transitioning = false;
+    endGame();
+    return;
+  }
   respawnPositions();
   flashToast(t("lifeLostToast"));
+  setTimeout(() => {
+    state.transitioning = false;
+    state.invulnerableTimer = 1600;
+  }, READY_PAUSE_MS);
 }
 
 function respawnPositions() {
   pacman.col = PAC_HOME.col; pacman.row = PAC_HOME.row;
   pacman.x = PAC_HOME.col * CELL; pacman.y = PAC_HOME.row * CELL;
-  pacman.dir = { x: 0, y: 0 }; pacman.queuedDir = { x: 0, y: 0 };
+  pacman.dir = { x: 0, y: 0 }; pacman.queuedDir = { x: 0, y: 0 }; pacman.queuedDirAge = 0;
   ghosts.forEach((g, i) => {
     g.col = g.home.col; g.row = g.home.row;
     g.x = g.home.col * CELL; g.y = g.home.row * CELL;
@@ -705,7 +735,7 @@ function checkGhostCollisions() {
       if (g.state === "frightened") { eatGhost(g); }
       else if (g.state !== "eaten") {
         if (state.invulnerableTimer > 0) continue;
-        loseLife();
+        startDeathSequence();
         break;
       }
     }
@@ -800,6 +830,7 @@ function togglePause() {
 
 function setQueuedDir(x, y) {
   pacman.queuedDir = { x, y };
+  pacman.queuedDirAge = 0;
   tryStart();
 }
 
@@ -838,8 +869,21 @@ el("btn-pause").addEventListener("click", (e) => { e.preventDefault(); togglePau
 
 /* ==================== Update loop ==================== */
 function update(dt) {
-  if (!state.running || state.paused || state.over || state.transitioning) return;
+  if (state.paused || state.over) return;
 
+  if (state.dying) {
+    state.dyingTimer += dt;
+    updateParticles(dt);
+    if (state.dyingTimer >= DEATH_ANIM_MS) finishDeathSequence();
+    return;
+  }
+
+  if (!state.running || state.transitioning) {
+    updateParticles(dt);
+    return;
+  }
+
+  pacman.queuedDirAge += dt;
   stepEntity(pacman, BASE_PAC_SPEED, dt, pickPacDir, handleDotConsumption);
   pacman.mouthPhase += (pacman.dir.x || pacman.dir.y) ? dt * 0.012 : 0;
 
@@ -936,6 +980,27 @@ function drawPacman() {
   ctx.restore();
 }
 
+function drawPacmanDying() {
+  const cx = pacman.x + CELL / 2, cy = pacman.y + CELL / 2;
+  const progress = Math.min(1, state.dyingTimer / DEATH_ANIM_MS);
+  const r = CELL * 0.46 * (1 - Math.max(0, progress - 0.75) / 0.25);
+  const mouth = progress * Math.PI * 0.97;
+  const spin = progress * Math.PI * 1.4;
+  ctx.save();
+  ctx.globalAlpha = 1 - Math.max(0, progress - 0.8) / 0.2;
+  ctx.translate(cx, cy);
+  ctx.rotate(spin);
+  ctx.beginPath();
+  ctx.moveTo(0, 0);
+  ctx.arc(0, 0, Math.max(0, r), mouth, Math.PI * 2 - mouth);
+  ctx.closePath();
+  ctx.fillStyle = "#ffd400";
+  ctx.shadowColor = "rgba(255, 212, 0, 0.75)";
+  ctx.shadowBlur = 12;
+  ctx.fill();
+  ctx.restore();
+}
+
 function drawGhostShape(x, y, size, color) {
   const r = size / 2;
   ctx.beginPath();
@@ -1007,8 +1072,12 @@ function drawGhost(g) {
 
 function draw() {
   drawMaze();
-  ghosts.forEach(drawGhost);
-  drawPacman();
+  if (state.dying) {
+    drawPacmanDying();
+  } else {
+    ghosts.forEach(drawGhost);
+    drawPacman();
+  }
   particles.forEach((p) => {
     const alpha = Math.max(0, 1 - p.life / p.maxLife);
     ctx.globalAlpha = alpha;
