@@ -149,7 +149,6 @@ const PHASES = [
 
 const BASE_PAC_SPEED = 0.155; // px/ms
 const BASE_GHOST_SPEED = 0.135; // px/ms
-const QUEUE_BUFFER_MS = 380; // how long a queued turn stays valid before it expires
 const DEATH_ANIM_MS = 900;
 const READY_PAUSE_MS = 650;
 
@@ -328,7 +327,7 @@ function makePacman() {
   return {
     col: PAC_HOME.col, row: PAC_HOME.row,
     x: PAC_HOME.col * CELL, y: PAC_HOME.row * CELL,
-    dir: { x: 0, y: 0 }, queuedDir: { x: 0, y: 0 }, queuedDirAge: 0, lastDir: { x: -1, y: 0 },
+    dir: { x: 0, y: 0 }, queuedDir: { x: 0, y: 0 }, lastDir: { x: -1, y: 0 },
     mouthPhase: 0,
   };
 }
@@ -395,20 +394,11 @@ function pacBlocked(col, row) {
 }
 function pickPacDir(e, col, row) {
   const q = pacman.queuedDir;
-  const qHasValue = q.x || q.y;
-  const qOpen = qHasValue && !pacBlocked(col + q.x, row + q.y);
-  // a freshly-queued turn takes priority so an early key press doesn't fire
-  // at the first unrelated intersection it happens to reach first
-  if (qOpen && pacman.queuedDirAge <= QUEUE_BUFFER_MS) {
+  if ((q.x || q.y) && !pacBlocked(col + q.x, row + q.y)) {
     pacman.lastDir = q;
     return q;
   }
   if ((e.dir.x || e.dir.y) && !pacBlocked(col + e.dir.x, row + e.dir.y)) return e.dir;
-  // current direction is a dead end: fall back to the queued turn even if stale
-  if (qOpen) {
-    pacman.lastDir = q;
-    return q;
-  }
   return { x: 0, y: 0 };
 }
 
@@ -617,7 +607,8 @@ function finishDeathSequence() {
 function respawnPositions() {
   pacman.col = PAC_HOME.col; pacman.row = PAC_HOME.row;
   pacman.x = PAC_HOME.col * CELL; pacman.y = PAC_HOME.row * CELL;
-  pacman.dir = { x: 0, y: 0 }; pacman.queuedDir = { x: 0, y: 0 }; pacman.queuedDirAge = 0;
+  pacman.dir = { x: 0, y: 0 }; pacman.queuedDir = { x: 0, y: 0 };
+  heldDirs.length = 0;
   ghosts.forEach((g, i) => {
     g.col = g.home.col; g.row = g.home.row;
     g.x = g.home.col * CELL; g.y = g.home.row * CELL;
@@ -828,11 +819,33 @@ function togglePause() {
   if (state.paused) resumeGame(); else pauseGame();
 }
 
-function setQueuedDir(x, y) {
+// Tracks which direction keys/buttons are currently held, in press order,
+// so releasing the most recent one correctly falls back to whichever
+// direction is still held — and so the OS's key-repeat on a held key can
+// never clobber a turn that was just queued for a different direction.
+const heldDirs = [];
+
+function pressDir(id, x, y) {
+  if (!heldDirs.some((h) => h.id === id)) heldDirs.push({ id, x, y });
   pacman.queuedDir = { x, y };
-  pacman.queuedDirAge = 0;
   tryStart();
 }
+
+function releaseDir(id) {
+  const idx = heldDirs.findIndex((h) => h.id === id);
+  if (idx !== -1) heldDirs.splice(idx, 1);
+  if (heldDirs.length > 0) {
+    const last = heldDirs[heldDirs.length - 1];
+    pacman.queuedDir = { x: last.x, y: last.y };
+  }
+}
+
+const DIR_KEYS = {
+  ArrowLeft: { x: -1, y: 0 }, a: { x: -1, y: 0 }, A: { x: -1, y: 0 },
+  ArrowRight: { x: 1, y: 0 }, d: { x: 1, y: 0 }, D: { x: 1, y: 0 },
+  ArrowUp: { x: 0, y: -1 }, w: { x: 0, y: -1 }, W: { x: 0, y: -1 },
+  ArrowDown: { x: 0, y: 1 }, s: { x: 0, y: 1 }, S: { x: 0, y: 1 },
+};
 
 document.addEventListener("keydown", (e) => {
   if (["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", " ", "a", "d", "A", "D", "w", "W", "s", "S", "p", "P"].includes(e.key)) {
@@ -842,29 +855,33 @@ document.addEventListener("keydown", (e) => {
     if (e.key === " " || e.key === "Enter") closeIntro();
     return;
   }
-  if (e.key === "ArrowLeft" || e.key === "a" || e.key === "A") setQueuedDir(-1, 0);
-  else if (e.key === "ArrowRight" || e.key === "d" || e.key === "D") setQueuedDir(1, 0);
-  else if (e.key === "ArrowUp" || e.key === "w" || e.key === "W") setQueuedDir(0, -1);
-  else if (e.key === "ArrowDown" || e.key === "s" || e.key === "S") setQueuedDir(0, 1);
+  const dir = DIR_KEYS[e.key];
+  // ignore the browser's auto-repeat keydowns for a key that's already held,
+  // so holding one direction can't keep re-asserting itself over a new turn
+  if (dir && !e.repeat) pressDir(e.key, dir.x, dir.y);
   else if (e.key === " ") tryStart();
   if (e.key === "p" || e.key === "P" || e.key === "Escape") togglePause();
+});
+
+document.addEventListener("keyup", (e) => {
+  if (DIR_KEYS[e.key]) releaseDir(e.key);
 });
 
 startOverlay.addEventListener("click", tryStart);
 pauseOverlay.addEventListener("click", resumeGame);
 
-function bindDpad(button, dx, dy) {
-  const down = (e) => { e.preventDefault(); button.classList.add("is-pressed"); setQueuedDir(dx, dy); };
-  const up = (e) => { if (e) e.preventDefault(); button.classList.remove("is-pressed"); };
+function bindDpad(button, dx, dy, id) {
+  const down = (e) => { e.preventDefault(); button.classList.add("is-pressed"); pressDir(id, dx, dy); };
+  const up = (e) => { if (e) e.preventDefault(); button.classList.remove("is-pressed"); releaseDir(id); };
   button.addEventListener("pointerdown", down);
   button.addEventListener("pointerup", up);
   button.addEventListener("pointerleave", up);
   button.addEventListener("pointercancel", up);
 }
-bindDpad(el("btn-up"), 0, -1);
-bindDpad(el("btn-down"), 0, 1);
-bindDpad(el("btn-left"), -1, 0);
-bindDpad(el("btn-right"), 1, 0);
+bindDpad(el("btn-up"), 0, -1, "touch-up");
+bindDpad(el("btn-down"), 0, 1, "touch-down");
+bindDpad(el("btn-left"), -1, 0, "touch-left");
+bindDpad(el("btn-right"), 1, 0, "touch-right");
 el("btn-pause").addEventListener("click", (e) => { e.preventDefault(); togglePause(); });
 
 /* ==================== Update loop ==================== */
@@ -883,7 +900,6 @@ function update(dt) {
     return;
   }
 
-  pacman.queuedDirAge += dt;
   stepEntity(pacman, BASE_PAC_SPEED, dt, pickPacDir, handleDotConsumption);
   pacman.mouthPhase += (pacman.dir.x || pacman.dir.y) ? dt * 0.012 : 0;
 
