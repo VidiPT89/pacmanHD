@@ -1,0 +1,167 @@
+<!DOCTYPE html>
+<html lang="pt-PT">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+<title>Pac-Man HD — Foge, Persegue, Come Tudo</title>
+<meta name="description" content="Um remake moderno e animado do clássico Pac-Man. Labirinto brilhante, quatro fantasmas com personalidade própria, pastilhas de poder e um placar de recordes, feito em HTML, CSS e JavaScript." />
+<meta property="og:title" content="Pac-Man HD" />
+<meta property="og:description" content="Foge, persegue, come tudo — remake moderno do clássico arcade." />
+<meta property="og:type" content="website" />
+<meta name="theme-color" content="#05060a" />
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E%F0%9F%9F%A1%3C/text%3E%3C/svg%3E" />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&family=Sora:wght@400;600;700;800&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet" />
+<link rel="stylesheet" href="style.css" />
+</head>
+<body>
+<canvas id="bg-canvas"></canvas>
+
+<div class="app">
+
+  <header class="topbar">
+    <div class="brand">
+      <span class="brand-icon">🟡</span>
+      <span class="brand-name">Pac-Man <em>HD</em></span>
+    </div>
+    <div class="topbar-actions">
+      <button id="sound-toggle" class="icon-btn" type="button" aria-label="Som" title="Som">
+        <span id="sound-icon">🔊</span>
+      </button>
+      <button id="lang-toggle" class="lang-btn" type="button" aria-label="Mudar idioma">
+        <span class="flag" id="lang-flag">🇵🇹</span>
+        <span id="lang-label">PT</span>
+      </button>
+    </div>
+  </header>
+
+  <main class="stage">
+    <section class="hero">
+      <p class="eyebrow" data-i18n="eyebrow">LABIRINTO CLÁSSICO</p>
+      <h1 class="title">
+        <span class="title-line" data-i18n="title1">Foge. Persegue.</span>
+        <span class="title-line accent" data-i18n="title2">Come tudo.</span>
+      </h1>
+      <p class="tagline" data-i18n="tagline">Guia o Pac-Man pelo labirinto, engole todos os pontos e as pastilhas de poder, e foge dos quatro fantasmas — cada um com a sua própria personalidade — antes que te apanhem.</p>
+    </section>
+
+    <section class="difficulty-picker" id="difficulty-picker" role="radiogroup" aria-label="Dificuldade">
+      <button class="diff-btn" data-diff="easy" role="radio" aria-checked="false" type="button">
+        <span class="diff-name" data-i18n="diffEasy">Fácil</span>
+        <span class="diff-meta"><span data-i18n="diffEasyMeta">4 vidas</span></span>
+      </button>
+      <button class="diff-btn is-active" data-diff="normal" role="radio" aria-checked="true" type="button">
+        <span class="diff-name" data-i18n="diffNormal">Normal</span>
+        <span class="diff-meta"><span data-i18n="diffNormalMeta">3 vidas</span></span>
+      </button>
+      <button class="diff-btn" data-diff="hard" role="radio" aria-checked="false" type="button">
+        <span class="diff-name" data-i18n="diffHard">Difícil</span>
+        <span class="diff-meta"><span data-i18n="diffHardMeta">2 vidas</span></span>
+      </button>
+    </section>
+
+    <section class="game-card" id="game-card">
+      <div class="game-card-glow"></div>
+
+      <div class="stat-row">
+        <div class="stat">
+          <span class="stat-label" data-i18n="scoreLabel">Pontos</span>
+          <span class="stat-value" id="score-value">0</span>
+        </div>
+        <div class="stat">
+          <span class="stat-label" data-i18n="levelLabel">Nível</span>
+          <span class="stat-value" id="level-value">1</span>
+        </div>
+        <div class="stat lives-stat">
+          <span class="stat-label" data-i18n="livesLabel">Vidas</span>
+          <div class="lives" id="lives-track" aria-hidden="true"></div>
+        </div>
+        <div class="stat">
+          <span class="stat-label" data-i18n="bestLabel">Melhor</span>
+          <span class="stat-value" id="best-value">—</span>
+        </div>
+      </div>
+
+      <div class="screen-frame">
+        <canvas id="game-canvas" width="560" height="560"></canvas>
+        <div class="scanlines" aria-hidden="true"></div>
+
+        <div class="overlay-layer" id="start-overlay">
+          <p class="overlay-kicker" data-i18n="pressStartKicker">TOCA OU PRIME</p>
+          <p class="overlay-title" data-i18n="pressStart">ESPAÇO PARA COMEÇAR</p>
+        </div>
+
+        <div class="overlay-layer is-hidden" id="pause-overlay">
+          <p class="overlay-title" data-i18n="pausedTitle">PAUSA</p>
+          <p class="overlay-sub" data-i18n="pausedSub">Prime P ou toca para retomar</p>
+        </div>
+
+        <div class="toast" id="wave-toast"></div>
+      </div>
+
+      <div class="controls-row">
+        <p class="hint-note desktop-only" data-i18n="controlsHint">⌨️ Setas ou WASD para mover · P para pausar</p>
+        <div class="dpad">
+          <button class="touch-btn dpad-up" id="btn-up" aria-label="Cima" type="button">▲</button>
+          <button class="touch-btn dpad-left" id="btn-left" aria-label="Esquerda" type="button">◀</button>
+          <button class="touch-btn dpad-pause" id="btn-pause" aria-label="Pausa" type="button">❚❚</button>
+          <button class="touch-btn dpad-right" id="btn-right" aria-label="Direita" type="button">▶</button>
+          <button class="touch-btn dpad-down" id="btn-down" aria-label="Baixo" type="button">▼</button>
+        </div>
+      </div>
+    </section>
+
+    <p class="hint-note" data-i18n="consoleHint">💡 Dica: abre a consola do navegador para veres pistas de desenvolvimento.</p>
+  </main>
+
+  <footer class="site-footer">
+    <p>
+      <span data-i18n="footerBy">Desenvolvido por</span>
+      <strong>David Arsénio Martins</strong>
+    </p>
+    <div class="footer-links">
+      <a href="https://ividi.dev/" target="_blank" rel="noopener noreferrer">ividi.dev</a>
+      <span class="dot">·</span>
+      <a href="https://github.com/VidiPT89/pacmanHD" target="_blank" rel="noopener noreferrer">GitHub</a>
+    </div>
+  </footer>
+</div>
+
+<div class="modal-overlay is-open" id="intro-overlay">
+  <div class="modal intro-modal">
+    <span class="modal-icon">🟡</span>
+    <h2 class="modal-title" data-i18n="introTitle">Pac-Man HD</h2>
+    <p class="modal-text" data-i18n="introText">Um remake moderno do clássico arcade de 1980. Engole o labirinto, foge dos fantasmas e persegue o recorde.</p>
+    <div class="intro-credit">
+      <p class="intro-credit-line">
+        <span data-i18n="footerBy">Desenvolvido por</span> <strong>David Arsénio Martins</strong>
+      </p>
+      <div class="intro-links">
+        <a href="https://ividi.dev/" target="_blank" rel="noopener noreferrer">ividi.dev</a>
+        <span class="dot">·</span>
+        <a href="https://github.com/VidiPT89/pacmanHD" target="_blank" rel="noopener noreferrer">GitHub</a>
+      </div>
+    </div>
+    <button class="ghost-btn intro-skip" id="intro-play" type="button" data-i18n="introSkipBtn">Saltar</button>
+    <div class="intro-progress"><span class="intro-progress-fill" id="intro-progress-fill"></span></div>
+  </div>
+</div>
+
+<div class="modal-overlay" id="modal-overlay">
+  <canvas id="confetti-canvas"></canvas>
+  <div class="modal" id="modal">
+    <span class="modal-icon" id="modal-icon">🟡</span>
+    <h2 class="modal-title" id="modal-title">Título</h2>
+    <p class="modal-text" id="modal-text">Texto</p>
+    <div class="modal-stats" id="modal-stats"></div>
+    <div class="modal-actions">
+      <button class="primary-btn" id="modal-replay" type="button" data-i18n="playAgainBtn">Jogar Novamente</button>
+      <button class="ghost-btn" id="modal-close" type="button" data-i18n="closeBtn">Fechar</button>
+    </div>
+  </div>
+</div>
+
+<script src="script.js"></script>
+</body>
+</html>
