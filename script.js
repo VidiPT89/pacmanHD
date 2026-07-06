@@ -164,10 +164,12 @@ function rawTile(col, row) {
 
 let collect = [];
 let remaining = 0;
+let dotsLayerDirty = true;
 
 function resetCollectibles() {
   collect = MAZE.map((v) => (v === 0 ? 1 : v === 3 ? 2 : 0));
   remaining = collect.filter((v) => v > 0).length;
+  dotsLayerDirty = true;
 }
 
 /* ==================== DOM refs ==================== */
@@ -528,12 +530,14 @@ function handleDotConsumption(col, row) {
   const v = collect[i];
   if (v === 1) {
     collect[i] = 0; remaining--;
+    dotsLayerDirty = true;
     state.score += 10;
     updateScoreUI();
     playChomp();
     checkExtraLife();
   } else if (v === 2) {
     collect[i] = 0; remaining--;
+    dotsLayerDirty = true;
     state.score += 50;
     updateScoreUI();
     triggerFrightened();
@@ -913,53 +917,77 @@ function update(dt) {
   checkGhostCollisions();
 }
 
-/* ==================== Draw ==================== */
-function drawMaze() {
-  ctx.fillStyle = "#010102";
-  ctx.fillRect(0, 0, CW, CH);
+/* ==================== Draw ====================
+   The maze walls never change and the small dots only change once in a
+   while (when eaten), so both are pre-rendered onto offscreen canvases
+   instead of being redrawn tile-by-tile (with expensive shadowBlur) on
+   every single animation frame — that per-frame cost was the source of
+   the stutter/slowdown. Only the pulsing power pellets stay "live". */
+const wallLayer = document.createElement("canvas");
+wallLayer.width = CW; wallLayer.height = CH;
+const wallLayerCtx = wallLayer.getContext("2d");
 
+const dotsLayer = document.createElement("canvas");
+dotsLayer.width = CW; dotsLayer.height = CH;
+const dotsLayerCtx = dotsLayer.getContext("2d");
+
+function renderWallLayer() {
+  const c = wallLayerCtx;
+  c.fillStyle = "#010102";
+  c.fillRect(0, 0, CW, CH);
   for (let r = 0; r < ROWS; r++) {
-    for (let c = 0; c < COLS; c++) {
-      const v = MAZE[idx(c, r)];
-      if (v === 1) {
-        const x = c * CELL, y = r * CELL;
-        ctx.save();
-        ctx.shadowColor = "rgba(60, 110, 255, 0.55)";
-        ctx.shadowBlur = 5;
-        ctx.fillStyle = "#152048";
-        roundRect(ctx, x + 1.2, y + 1.2, CELL - 2.4, CELL - 2.4, 4);
-        ctx.fill();
-        ctx.strokeStyle = "#4d78ff";
-        ctx.lineWidth = 1.3;
-        roundRect(ctx, x + 1.2, y + 1.2, CELL - 2.4, CELL - 2.4, 4);
-        ctx.stroke();
-        ctx.restore();
-      }
+    for (let col = 0; col < COLS; col++) {
+      if (MAZE[idx(col, r)] !== 1) continue;
+      const x = col * CELL, y = r * CELL;
+      c.save();
+      c.shadowColor = "rgba(60, 110, 255, 0.55)";
+      c.shadowBlur = 5;
+      c.fillStyle = "#152048";
+      roundRect(c, x + 1.2, y + 1.2, CELL - 2.4, CELL - 2.4, 4);
+      c.fill();
+      c.strokeStyle = "#4d78ff";
+      c.lineWidth = 1.3;
+      roundRect(c, x + 1.2, y + 1.2, CELL - 2.4, CELL - 2.4, 4);
+      c.stroke();
+      c.restore();
     }
   }
+}
+
+function renderDotsLayer() {
+  const c = dotsLayerCtx;
+  c.clearRect(0, 0, CW, CH);
+  c.fillStyle = "#ffe28a";
+  c.shadowColor = "rgba(255, 212, 0, 0.6)";
+  c.shadowBlur = 4;
+  for (let i = 0; i < collect.length; i++) {
+    if (collect[i] !== 1) continue;
+    const col = i % COLS, r = Math.floor(i / COLS);
+    const cx = col * CELL + CELL / 2, cy = r * CELL + CELL / 2;
+    c.beginPath();
+    c.arc(cx, cy, 2.1, 0, Math.PI * 2);
+    c.fill();
+  }
+  dotsLayerDirty = false;
+}
+
+function drawMaze() {
+  ctx.drawImage(wallLayer, 0, 0);
+  if (dotsLayerDirty) renderDotsLayer();
+  ctx.drawImage(dotsLayer, 0, 0);
 
   const pulse = 0.75 + Math.sin(performance.now() / 220) * 0.25;
   for (let i = 0; i < collect.length; i++) {
-    const v = collect[i];
-    if (!v) continue;
+    if (collect[i] !== 2) continue;
     const c = i % COLS, r = Math.floor(i / COLS);
     const cx = c * CELL + CELL / 2, cy = r * CELL + CELL / 2;
     ctx.save();
-    if (v === 1) {
-      ctx.fillStyle = "#ffe28a";
-      ctx.shadowColor = "rgba(255, 212, 0, 0.6)";
-      ctx.shadowBlur = 4;
-      ctx.beginPath();
-      ctx.arc(cx, cy, 2.1, 0, Math.PI * 2);
-      ctx.fill();
-    } else {
-      ctx.fillStyle = "#ffe28a";
-      ctx.shadowColor = "rgba(255, 212, 0, 0.85)";
-      ctx.shadowBlur = 10;
-      ctx.beginPath();
-      ctx.arc(cx, cy, 5.5 * pulse + 1.5, 0, Math.PI * 2);
-      ctx.fill();
-    }
+    ctx.fillStyle = "#ffe28a";
+    ctx.shadowColor = "rgba(255, 212, 0, 0.85)";
+    ctx.shadowBlur = 10;
+    ctx.beginPath();
+    ctx.arc(cx, cy, 5.5 * pulse + 1.5, 0, Math.PI * 2);
+    ctx.fill();
     ctx.restore();
   }
 }
@@ -1243,5 +1271,6 @@ bgTick();
 /* ==================== Init ==================== */
 el("sound-icon").textContent = state.soundOn ? "🔊" : "🔇";
 applyTranslations();
+renderWallLayer();
 newGame(state.difficulty);
 requestAnimationFrame(loop);
